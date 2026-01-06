@@ -2,13 +2,16 @@
 package mapper
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha1"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -47,7 +50,9 @@ type Result struct {
 // Mapper handles the URL mapping process.
 type Mapper struct {
 	client     *immich.ImmichClient
+	httpClient *http.Client
 	serverURL  string
+	apiKey     string
 	dryRun     bool
 	fsyss      []fs.FS
 	logger     func(format string, args ...interface{})
@@ -67,6 +72,7 @@ type Config struct {
 func New(cfg Config) (*Mapper, error) {
 	m := &Mapper{
 		serverURL: strings.TrimSuffix(cfg.Server, "/"),
+		apiKey:    cfg.APIKey,
 		dryRun:    cfg.DryRun,
 		logger:    cfg.Logger,
 	}
@@ -97,6 +103,14 @@ func New(cfg Config) (*Mapper, error) {
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create Immich client: %w", err)
+		}
+
+		// Create HTTP client for direct API calls
+		m.httpClient = &http.Client{
+			Timeout: 30 * time.Second,
+			Transport: &http.Transport{
+				TLSClientConfig: &tls.Config{InsecureSkipVerify: cfg.SkipSSL},
+			},
 		}
 	}
 
@@ -220,6 +234,8 @@ func (m *Mapper) processFS(ctx context.Context, fsys fs.FS, result *Result) erro
 			m.logger("Dry-run: would query Immich for hash %s (file: %s, URL: %s)", hash, mediaFile, md.URL)
 			return nil
 		}
+
+		m.logger("Processing: %s (hash: %s)", mediaPath, hash)
 
 		// Try hash-based matching first (searches all visibility types)
 		foundAssets, err := m.searchAssetsByHash(ctx, hash)
@@ -370,39 +386,54 @@ func (r *Result) WriteJSON(w io.Writer) error {
 	return enc.Encode(r)
 }
 
-// searchAssetsByHash searches for assets by hash.
-// First tries the standard search (timeline), then falls back to searching all assets.
-func (m *Mapper) searchAssetsByHash(ctx context.Context, hash string) ([]*immich.Asset, error) {
-	// First try standard search (faster, but only searches timeline)
-	assets, err := m.client.GetAssetsByHash(ctx, hash)
-	if err != nil {
-		return nil, err
-	}
-	if len(assets) > 0 {
-		return assets, nil
-	}
-
-	// Fallback: search all assets including archived/hidden
-	// This is slower but finds assets in all visibility states
-	var results []*immich.Asset
-	err = m.client.GetAllAssets(ctx, func(a *immich.Asset) error {
-		if a.Checksum == hash {
-			results = append(results, a)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return results, nil
+// searchMetadataResponse matches the Immich API response structure.
+type searchMetadataResponse struct {
+	Assets struct {
+		Items []*immich.Asset `json:"items"`
+	} `json:"assets"`
 }
 
-// searchAssetsByFilename searches for assets by filename.
-// First tries the standard search (timeline), then falls back to searching all assets.
-func (m *Mapper) searchAssetsByFilename(ctx context.Context, filename string) ([]*immich.Asset, error) {
-	// First try standard search (faster, but only searches timeline)
-	assets, err := m.client.GetAssetsByImageName(ctx, filename)
+// searchWithVisibility searches for assets using the Immich API with a specific visibility.
+func (m *Mapper) searchWithVisibility(ctx context.Context, query map[string]interface{}, visibility string) ([]*immich.Asset, error) {
+	query["visibility"] = visibility
+	query["size"] = 100
+
+	body, err := json.Marshal(query)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", m.serverURL+"/api/search/metadata", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", m.apiKey)
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d", resp.StatusCode)
+	}
+
+	var result searchMetadataResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	return result.Assets.Items, nil
+}
+
+// searchAssetsByHash searches for assets by hash across timeline and archive.
+func (m *Mapper) searchAssetsByHash(ctx context.Context, hash string) ([]*immich.Asset, error) {
+	query := map[string]interface{}{"checksum": hash}
+
+	// Try timeline first
+	assets, err := m.searchWithVisibility(ctx, query, "timeline")
 	if err != nil {
 		return nil, err
 	}
@@ -410,19 +441,35 @@ func (m *Mapper) searchAssetsByFilename(ctx context.Context, filename string) ([
 		return assets, nil
 	}
 
-	// Fallback: search all assets including archived/hidden
-	var results []*immich.Asset
-	err = m.client.GetAllAssets(ctx, func(a *immich.Asset) error {
-		if a.OriginalFileName == filename {
-			results = append(results, a)
-		}
-		return nil
-	})
+	// Try archive
+	assets, err = m.searchWithVisibility(ctx, map[string]interface{}{"checksum": hash}, "archive")
 	if err != nil {
 		return nil, err
 	}
 
-	return results, nil
+	return assets, nil
+}
+
+// searchAssetsByFilename searches for assets by filename across timeline and archive.
+func (m *Mapper) searchAssetsByFilename(ctx context.Context, filename string) ([]*immich.Asset, error) {
+	query := map[string]interface{}{"originalFileName": filename}
+
+	// Try timeline first
+	assets, err := m.searchWithVisibility(ctx, query, "timeline")
+	if err != nil {
+		return nil, err
+	}
+	if len(assets) > 0 {
+		return assets, nil
+	}
+
+	// Try archive
+	assets, err = m.searchWithVisibility(ctx, map[string]interface{}{"originalFileName": filename}, "archive")
+	if err != nil {
+		return nil, err
+	}
+
+	return assets, nil
 }
 
 // filterByTimestamp filters assets to find matches by timestamp.
