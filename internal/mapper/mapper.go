@@ -32,6 +32,7 @@ type Mapping struct {
 // NotFound represents a Google Photos asset that could not be matched in Immich.
 type NotFound struct {
 	GoogleURL string `json:"google_url"`
+	JSONFile  string `json:"json_file"`
 	Path      string `json:"path"`
 	Hash      string `json:"hash"`
 }
@@ -293,6 +294,7 @@ func (m *Mapper) processFS(ctx context.Context, fsys fs.FS, result *Result) erro
 			result.Stats.NotFoundInImmich++
 			result.NotFound = append(result.NotFound, NotFound{
 				GoogleURL: md.URL,
+				JSONFile:  fpath,
 				Path:      mediaPath,
 				Hash:      hash,
 			})
