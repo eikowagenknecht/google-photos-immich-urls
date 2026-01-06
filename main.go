@@ -20,12 +20,13 @@ import (
 
 var (
 	// CLI flags
-	server            string
-	apiKey            string
-	skipSSL           bool
-	dryRun            bool
-	outputFile        string
-	fallbackFilename  bool
+	server           string
+	apiKey           string
+	skipSSL          bool
+	dryRun           bool
+	outputFile       string
+	fallbackFilename bool
+	verbose          bool
 )
 
 func main() {
@@ -61,6 +62,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Don't connect to Immich, just list found URLs")
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path (default: stdout)")
 	rootCmd.Flags().BoolVar(&fallbackFilename, "fallback-filename", false, "Fall back to filename+timestamp matching if hash doesn't match (may produce wrong matches)")
+	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Include detailed output (not_found, orphan_media, stats, extra fields)")
 
 	rootCmd.MarkFlagRequired("server")
 	rootCmd.MarkFlagRequired("api-key")
@@ -125,7 +127,7 @@ func run(cmd *cobra.Command, args []string) error {
 		out = os.Stdout
 	}
 
-	if err := result.WriteJSON(out); err != nil {
+	if err := result.WriteJSON(out, verbose); err != nil {
 		return fmt.Errorf("failed to write output: %w", err)
 	}
 
@@ -139,6 +141,7 @@ func run(cmd *cobra.Command, args []string) error {
 	fmt.Fprintf(os.Stderr, "  - by filename:            %d\n", result.Stats.MatchedByFilename)
 	fmt.Fprintf(os.Stderr, "Not found in Immich:        %d\n", result.Stats.NotFoundInImmich)
 	fmt.Fprintf(os.Stderr, "No media file for JSON:     %d\n", result.Stats.NoMediaFile)
+	fmt.Fprintf(os.Stderr, "Orphan media (no JSON):     %d\n", result.Stats.OrphanMedia)
 	fmt.Fprintf(os.Stderr, "Hash computation errors:    %d\n", result.Stats.HashErrors)
 
 	if outputFile != "" {
