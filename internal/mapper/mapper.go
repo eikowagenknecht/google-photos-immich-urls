@@ -29,6 +29,13 @@ type Mapping struct {
 	MatchMethod string `json:"match_method"` // "hash" or "filename+timestamp"
 }
 
+// NotFound represents a Google Photos asset that could not be matched in Immich.
+type NotFound struct {
+	GoogleURL string `json:"google_url"`
+	Path      string `json:"path"`
+	Hash      string `json:"hash"`
+}
+
 // Stats contains statistics about the mapping process.
 type Stats struct {
 	TotalJSONFiles    int `json:"total_json_files"`
@@ -43,38 +50,42 @@ type Stats struct {
 
 // Result contains the complete mapping result.
 type Result struct {
-	Mappings []Mapping `json:"mappings"`
-	Stats    Stats     `json:"stats"`
+	Mappings []Mapping  `json:"mappings"`
+	NotFound []NotFound `json:"not_found"`
+	Stats    Stats      `json:"stats"`
 }
 
 // Mapper handles the URL mapping process.
 type Mapper struct {
-	client     *immich.ImmichClient
-	httpClient *http.Client
-	serverURL  string
-	apiKey     string
-	dryRun     bool
-	fsyss      []fs.FS
-	logger     func(format string, args ...interface{})
+	client           *immich.ImmichClient
+	httpClient       *http.Client
+	serverURL        string
+	apiKey           string
+	dryRun           bool
+	fallbackFilename bool
+	fsyss            []fs.FS
+	logger           func(format string, args ...interface{})
 }
 
 // Config contains mapper configuration.
 type Config struct {
-	Server        string
-	APIKey        string
-	SkipSSL       bool
-	DryRun        bool
-	TakeoutPaths  []string
-	Logger        func(format string, args ...interface{})
+	Server           string
+	APIKey           string
+	SkipSSL          bool
+	DryRun           bool
+	FallbackFilename bool
+	TakeoutPaths     []string
+	Logger           func(format string, args ...interface{})
 }
 
 // New creates a new Mapper instance.
 func New(cfg Config) (*Mapper, error) {
 	m := &Mapper{
-		serverURL: strings.TrimSuffix(cfg.Server, "/"),
-		apiKey:    cfg.APIKey,
-		dryRun:    cfg.DryRun,
-		logger:    cfg.Logger,
+		serverURL:        strings.TrimSuffix(cfg.Server, "/"),
+		apiKey:           cfg.APIKey,
+		dryRun:           cfg.DryRun,
+		fallbackFilename: cfg.FallbackFilename,
+		logger:           cfg.Logger,
 	}
 
 	if m.logger == nil {
@@ -126,6 +137,7 @@ func (m *Mapper) Close() error {
 func (m *Mapper) Run(ctx context.Context) (*Result, error) {
 	result := &Result{
 		Mappings: make([]Mapping, 0),
+		NotFound: make([]NotFound, 0),
 	}
 
 	// Validate Immich connection (unless dry-run)
@@ -245,8 +257,8 @@ func (m *Mapper) processFS(ctx context.Context, fsys fs.FS, result *Result) erro
 
 		matchedByHash := len(foundAssets) > 0
 
-		// Fallback to filename-based matching if hash didn't work
-		if len(foundAssets) == 0 {
+		// Fallback to filename-based matching if hash didn't work (opt-in)
+		if len(foundAssets) == 0 && m.fallbackFilename {
 			// Try with the original filename from metadata
 			searchName := md.Title
 			if searchName == "" {
@@ -279,6 +291,11 @@ func (m *Mapper) processFS(ctx context.Context, fsys fs.FS, result *Result) erro
 
 		if len(foundAssets) == 0 {
 			result.Stats.NotFoundInImmich++
+			result.NotFound = append(result.NotFound, NotFound{
+				GoogleURL: md.URL,
+				Path:      mediaPath,
+				Hash:      hash,
+			})
 			m.logger("Not found in Immich: %s (hash: %s)", mediaPath, hash)
 			return nil
 		}

@@ -37,12 +37,13 @@ google-photos-immich-urls \
 | `-o, --output` | Output file (default: stdout) |
 | `--skip-verify-ssl` | Skip SSL verification |
 | `--dry-run` | List found URLs without querying Immich |
+| `--fallback-filename` | Fall back to filename+timestamp matching if hash doesn't match (may produce wrong matches) |
 
 ## Matching
 
-It will try to match by **SHA1 hash** first. If it doesn't work, it will instead try to match by **filename + timestamp** with a 2s tolerance.
-This only happened for me once and didn't work perfectly - it matched an edited version of the same picture.
-But it should be good enough for this purpose.
+By default, it matches by **SHA1 hash** only. This is reliable but may miss files where Google Photos modified the content (e.g., edited photos).
+
+With `--fallback-filename`, it will also try to match by **filename + timestamp** (2s tolerance) if the hash doesn't match. Use with caution - this may produce wrong matches (e.g., matching an edited version instead of the original).
 
 ## Output
 

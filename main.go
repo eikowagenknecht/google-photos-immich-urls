@@ -20,11 +20,12 @@ import (
 
 var (
 	// CLI flags
-	server     string
-	apiKey     string
-	skipSSL    bool
-	dryRun     bool
-	outputFile string
+	server            string
+	apiKey            string
+	skipSSL           bool
+	dryRun            bool
+	outputFile        string
+	fallbackFilename  bool
 )
 
 func main() {
@@ -59,6 +60,7 @@ func init() {
 	rootCmd.Flags().BoolVar(&skipSSL, "skip-verify-ssl", false, "Skip SSL certificate verification")
 	rootCmd.Flags().BoolVar(&dryRun, "dry-run", false, "Don't connect to Immich, just list found URLs")
 	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file path (default: stdout)")
+	rootCmd.Flags().BoolVar(&fallbackFilename, "fallback-filename", false, "Fall back to filename+timestamp matching if hash doesn't match (may produce wrong matches)")
 
 	rootCmd.MarkFlagRequired("server")
 	rootCmd.MarkFlagRequired("api-key")
@@ -89,11 +91,12 @@ func run(cmd *cobra.Command, args []string) error {
 
 	// Create mapper
 	m, err := mapper.New(mapper.Config{
-		Server:       server,
-		APIKey:       apiKey,
-		SkipSSL:      skipSSL,
-		DryRun:       dryRun,
-		TakeoutPaths: args,
+		Server:           server,
+		APIKey:           apiKey,
+		SkipSSL:          skipSSL,
+		DryRun:           dryRun,
+		FallbackFilename: fallbackFilename,
+		TakeoutPaths:     args,
 		Logger: func(format string, args ...interface{}) {
 			fmt.Fprintf(os.Stderr, format+"\n", args...)
 		},
