@@ -42,9 +42,10 @@ type NotFound struct {
 
 // OrphanMedia represents a media file without a JSON sidecar (no Google URL available).
 type OrphanMedia struct {
-	Path      string `json:"path"`
-	Hash      string `json:"hash,omitempty"`
-	ImmichURL string `json:"immich_url,omitempty"` // Set if found in Immich
+	Path           string `json:"path"`
+	Hash           string `json:"hash,omitempty"`
+	ImmichURL      string `json:"immich_url,omitempty"`      // Set if found in Immich
+	ImmichFilename string `json:"immich_filename,omitempty"` // Filename in Immich (to detect renames)
 }
 
 // Stats contains statistics about the mapping process.
@@ -390,7 +391,15 @@ func (m *Mapper) processFS(ctx context.Context, fsys fs.FS, result *Result) erro
 					// Check if it exists in Immich
 					assets, err := m.searchAssetsByHash(ctx, hash)
 					if err == nil && len(assets) > 0 {
-						orphan.ImmichURL = fmt.Sprintf("%s/photos/%s", m.serverURL, assets[0].ID)
+						asset := assets[0]
+						orphan.ImmichURL = fmt.Sprintf("%s/photos/%s", m.serverURL, asset.ID)
+						orphan.ImmichFilename = asset.OriginalFileName
+
+						// Log if filename differs (for user awareness)
+						takeoutFilename := path.Base(mediaPath)
+						if asset.OriginalFileName != takeoutFilename {
+							m.logger("Filename mismatch: takeout=%s, immich=%s", takeoutFilename, asset.OriginalFileName)
+						}
 					}
 				} else {
 					m.logger("Orphan media: %s (hash error: %v)", mediaPath, err)
